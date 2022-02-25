@@ -1,0 +1,224 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{A Fast OpenCL Implementation of an LDPC Codec For Packet Erasure Channels and Recommendation for DIFI Standard\\
+%{\footnotesize \textsuperscript{*}Note: Sub-titles are not captured in Xplore and should not be used}
+\thanks{This research was funded internally by Envistacom.}
+}
+
+\author{\IEEEauthorblockN{Chad Cole}
+\IEEEauthorblockA{\textit{Envistacom} \\
+\and
+\IEEEauthorblockN{2\textsuperscript{nd} Given Name Surname}
+\IEEEauthorblockA{\textit{dept. name of organization (of Aff.)} \\
+\textit{name of organization (of Aff.)}\\
+City, Country \\
+email address or ORCID}
+} }
+
+\maketitle
+
+\begin{abstract}
+Erasure codes are a form of Forward Error Correction (FEC) that is used to reconstruct messages that are sent over an erasure channel.  The erasure channel is a popular way to model a lossy packet network.  Erasure codes are typically employed at a higher layer in the communication stack, such as at the application layer.  Erasure codes are not nearly as ubiquitous in communications systems as the error correction codes used at the physical layer.  However, there are certain situations, such as when sending a real-time, high-data rate stream of digital intermediate frequency I/Q samples over a potentially lossy packet network, where erasure coding can offer great benefits.  This paper compares two popular types of well-known erasure codes, LDPC codes and Reed Solomon codes, and recommends an LDPC code for use in the nascent DIFI \cite{DIFI2021IEEEStd4900-2021} standard.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Erasure Codes, LDPC Codes, Reed Solomon
+\end{IEEEkeywords}
+
+\section{Introduction}
+Erasure codes are a form of Forward Error Correction (FEC) that are used to reconstruct messages that are sent over an erasure channel \cite{CovTho91}, such as a lossy packet network.  The erasure channel has the property in which message symbols either arrive at the destination correctly or are 'erased' and the receiver knows the symbol is missing.  Forward error correction (FEC) erasure codes have been a popular research topic at various times over the last few decades; however, to the author's knowledge, they have never made much of an impact in real world communication systems.  The reasons for this lack of interest in practical communication systems are varied.  One common competing higher-layer method to avoid packet loss is to employ some sort of retransmission scheme, such as what is done in the transport layer with Transmission Control Protocol (TCP) \cite{cerf-74}.  To ensure reliable delivery in TCP, packets that are missing at the destination are simply requested again from the source.  As long as there is a suitable feedback channel with a relatively short round trip time between source and destination, then a retransmission scheme works well.  
+
+However, there are situations where retransmission is either not feasible or unwieldy.  The obvious case where FEC holds a big advantage over the simple retransmission scheme is when there is no feedback channel in which to request missing packets.  Another important scenario where FEC is preferred over retransmission is in a one-to-many or broadcast scenario \cite{luby-07}.  In this scenario, where there are many receivers, each of these receivers could potentially request different packets to be retransmitted.  These redundant retransmissions can waste bandwidth compared to the FEC case where the coded message already contains redundancy that all receivers can make use of to decode the message.  A retransmission scheme is also difficult when there is a long round trip time (RTT) in the communication channel between source and destination, because the buffers required to store packets that may potentially need to be retransmitted must grow linearly with the RTT.
+
+There are many codes that can be used as erasure codes.  Codes that are good candidates for physical layer error correction - because they may have good codeword distance properties or efficient encoding and decoding algorithms - are also typically good candidates as codes for the binary erasure channel.  The classic example of a good erasure code is the class of Reed Solomon (RS) codes \cite{reed-1960}, which have the amazing property of being Maximum Distance Separable (MDS).  An MDS code always has a minimum code distance of $n-k+1$, where $k$ is the number of message symbols being sent and $n$ (where $n > k$) is the coded message symbol length with added redundancy.  The MDS codes have the best distance property that a code can ever possess, as these codes meet the Singleton Bound \cite{Singleton-64}.  
+
+Low-Density Parity-Check (LDPC) codes are a popular linear block coding technique that has been around for over 50 years \cite{Gallager-62}.  While they have been used as physical layer error correcting codes for many years, it is only more recently that they have been considered as candidates for codes over an erasure channel.  LDPC codes are characterized by a sparse parity check matrix, $\bf{H}$.  An LDPC code has $k$ source symbols and $n-k$ parity symbols, for a total of $n$ symbols in a codeword.  These two parameters are usually written as an $(n, k)$ pair, and the code rate is defined as $r=\frac{k}{n}$, which describes the amount of redundancy in the code.  LDPC codes are popular because there is a simple 'message passing algorithm' (MPA) which can be utilized to decode the noisy received codewords.  The MPA uses the sparsity of $\bf{H}$ to iteratively pass messages about bit and parity check probabilities across all bits in the code.  While the MPA is suboptimal, it has good performance for well designed LDPC codes and is a great choice for a practical codec implementation.  The efficient encoding and decoding algorithms available for LDPC codes allow for code designs to employ large block lengths and arbitrary code rates.
+
+Another popular class of erasure codes is Raptor codes \cite{Shokrollahi-06}, which are very similar to LDPC codes and share many of their strengths and weaknesses.  For larger block lengths and over a higher order Galois Field, Raptor codes have similar performance to RS codes, but are much easier to implement and have lower encoding and decoding complexity.  A good performance comparison between LDPC codes and Raptor codes was illustrated in \cite{Roca-2013}, where the conclusion was made that suitably constructed LDPC codes using a maximum likelihood (ML) decoder had similar performance to Raptor codes, but without the Intellectual Property concerns.
+
+In Section \ref{sec:LDPC_construction}, this paper introduces an LDPC code construction that has good decoding performance at higher SNR, or, equivalently stated, at low raw Packet Error Rates (PER).  Next, Section \ref{sec:TheoreticalImplementation} explains some of the practical considerations in implementing RS and LDPC codecs.  Section \ref{sec:Performance} provides simulation results showing the performance of RS versus LDPC codes for several block lengths and code rates.  Section \ref{sec:Implementation} describes the OpenCL design and shows some high SNR performance results of the LDPC code that were made possible because of the fast hardware implementation of the decoder.  The final section offers a summary of the paper.
+
+\section{Random Code Construction With Girth Eight}\label{sec:LDPC_construction}
+
+
+The LDPC codes created for this paper were designed with three major concerns in mind:
+
+\begin{itemize}
+	\item First, the codes needed to be systematic.
+	\item Next, the codes needed to allow for a simple implementation of both the encoder and the decoder.
+	\item Finally, the codes needed to have a relatively low error floor, since it is in this higher SNR region where these codes will typically be utilized.
+\end{itemize}
+
+There are various ways to design LDPC codes to ensure certain desirable conditions are met for encoding and decoding.  One popular constraint for erasure codes is to create a ‘systematic’ code where the first $k$ symbols of a codeword are the original source symbols that are being transmitted.  A systematic code has the nice property that if no erasures occur on the original $k$ source symbols, then no effort must be expended in decoding the received codeword.  The $\bf{H}$ matrix structure in Figure \ref{fig:LDPC_matrix_triangular} holds this systematic encoding property.  The ‘triangle’ format that allows systematic encoding is evident in the right half of the matrix in the figure.  
+
+To illustrate the systematic encoding process, consider the simple example $\bf{H}$ matrix, though not low-density in nature, that is shown in Equation \ref{eq:LDPC_matrix_example}.  The codeword $\bf{v}$ in Equation \ref{eq:codeword_example}, consists of labels to show which symbols are associated with source versus parity symbols.  The first $k=3$ symbols are source symbols and the last $(n-k)=3$ symbols are parity symbols.  The parity check matrix in Equation \ref{eq:LDPC_matrix_example} forms a $(6, 3)$ rate $\frac{1}{2}$ code in triangular format.  Remember that in a linear block code, for a vector to be in the code, the constraint $\bf{v}\bf{H}^T=\bf{0}$ must be met.  To generate the first parity symbol, each of the source symbols at the positions of non-zero columns in the first row of $\bf{H}$ must be XORed together to form $p_1$.  For this first row, $s_2$ is the only non-zero column, so $p_1 = s_2$.  Setting $p_1$ in this way ensures that the first position of $\bf{v}\bf{H}^T = 0$.  In a similar fashion, to ensure that the second position of $\bf{v}\bf{H}^T = 0$, $p_2$ can be found to equal $s_1 XOR s_3$.  Notice that the calculation of $p_2$ does not affect our previously calculated $p_1$ because there is a ‘0’ in the $p_2$ column for the first row.   Finally, $p_3 = s_3 XOR p_1$.  Again, due to the triangle format of $\bf{H}$, the rows above in column $p_3$ are zero and neither of the previously calculated $p_1$ and $p_2$ are affected by $p_3$.
+
+\begin{equation}
+	\bf{v} = 
+	\begin{pmatrix}
+		s_1&s_2&s_3&p_1&p_2&p_3
+	\end{pmatrix}
+	\label{eq:codeword_example}
+\end{equation}
+
+
+\begin{equation}
+	\bf{H} = 
+	\begin{pmatrix}
+		0&1&0&1&0&0 \\
+		1&0&1&0&1&0 \\
+		0&0&1&1&0&1
+	\end{pmatrix}
+\label{eq:LDPC_matrix_example}
+\end{equation}
+
+Most LDPC code constructions satisfy the easy implementation constraint above, but to further ease hardware implementation, a regular parity check degree was utilized.  Since the message passing decoding algorithm used on the erasure channel performs its operations on the rows of $\bf{H}$, in other words the parity check constraints of the code, it makes a parallel implementation more efficient if the check node degree (the number of ones in each row of $\bf{H}$) is about the same, i.e. 'regular.'
+
+
+To help achieve the third bullet above, a low error floor, the codes were constructed in such a way that the Tanner graph \cite{tanner-81} of the code contains no 4-cycles or 6-cycles and thus the graph is guaranteed to possess a girth of at least eight.  As the girth of a code increases, so does the minimum distance of the code \cite{tanner-01}, as well as the small weight stopping set profile which allows the MPA to perform closer to an ML decoder \cite{Gallager}.
+
+The specific code construction method utilized in this work is similar to the 'Bit-filling' algorithm of \cite{Campello-01}.  However, since the algorithm in this work was independently conceived, it does have a few differences.  One difference is that the row or column of $\bf{H}$ to which one's are added is based on a probabilistic rule in which rows and columns are given a probability to be used based on the inverse of their current weight in $\bf{H}$.  For example, these codes were constructed in a row-wise manner, so for each row, the column chosen for an additional one in $\bf{H}$ would be chosen with a probability that is uniformly inversely proportional to it's current weight in $\bf{H}$.  As each one is added to $\bf{H}$, the girth eight constraint is checked and if it fails, then a new one position is randomly chosen among the set of columns of $\bf{H}$ still under consideration.  The number of one's in each row of $\bf{H}$ is kept regular and the degree distribution of the columns of $\bf{H}$ can be constrained if desired.
+
+\section{Implementation Comparison}\label{sec:TheoreticalImplementation}
+
+In this section we will compare the difficulty of encoding and decoding RS and LDPC codes over the erasure channel.  First, a block of $k$ source symbols, $\bf{u}$, is encoded into a block of $n$ coded symbols, $\bf{v}$, by the linear matrix operation of $\bf{v}=\bf{u}\bf{G}$.  $\bf{G}$ is the $k X n$ generator matrix of the linear block code.  Next, $\bf{v}$ is sent over an erasure channel yielding $\bf{y} = \bf{v} + \bf{e}$ at the receiver, where $\bf{e}$ is the vector of erasures, where if $e_i$ is 1 then an erasure occurs at the $i^{th}$ symbol in $\bf{v}$.  The goal of a decoder is to try to reconstruct $\bf{u}$ from $\bf{y}$.
+
+\subsection{Reed Solomon Codes}\label{sec_RS}
+
+RS codes are typically implemented in systematic form and thus have a generator matrix of the following form:
+
+$\bf{G}$ =
+$\begin{pmatrix}
+ \bf{I} & \bf{P}\\
+\end{pmatrix}$
+
+$\bf{I}$ is a $kXk$ identity matrix and $\bf{P}$ is a $kX(n-k)$ dense matrix over a higher order Galois Field, such as the $GF(2^8)$ used in the RS code in the TIA-5041 standard \cite{TIA5041_standard}.
+The implementation of RS codecs presents two major difficulties.  First, all matrix operations must be performed over the Galois Field order of the RS code, which gets unwieldy for large field sizes.  For smaller field sizes, such as 256 and under, a simple lookup table approach can be used for arithmetic operations.  Second, the generator matrix is $\it{dense}$, which means that the matrix multiplication necessary for encoding will require O(k(n-k)) operations over the Galois Field.  Decoding linear codes over an erasure channel involves finding the solution to $\bf{u} = \bf{y}_c{\bf{G}_c}^{-1}$, where $\bf{G}_c$ is the subset of columns of $\bf{G}$ that were received (i.e. not erased).  These correctly received positions of $\bf{y}$ are designated by $\bf{y}_c$.  The matrix inversion computation for decoding must be completed using a full Gaussian elimination algorithm, which has a complexity of $O((k)^3)$.  The RS codes have the nice property that any $k$ columns of $\bf{G}$ are guaranteed to be full rank and thus lead to a unique solution for $\bf{u}$.
+
+\subsection{LDPC Codes}
+
+The encoding complexity of these systematic triangular form LDPC codes is $O((n-k)w_r)$, where $w_r$ is the row weight of $\bf{H}$.  This can be seen from following the simple encoding procedure described with an example in Section \ref{sec:LDPC_construction}.  The decoding principle for LDPC codes sent over the erasure channel is the same as for the RS codes described above; however, the decoding is explained from a $\bf{H}$ perspective instead of a $\bf{G}$ perspective, since LDPC codes are characterized by their $\bf{H}$.  It is true that for any linear block code, $\bf{H}\bf{v} = \bf{0}$.  Thus, over the binary field, $\bf{H}_c\bf{v}_c = \bf{H}_e\bf{v}_e$, where $\bf{H}_c$ and $\bf{v}_c$ are the subsets of columns of $\bf{H}$ and $\bf{v}$ respectively where an erasure does not occur.  Similarly, $\bf{H}_e$ and $\bf{v}_e$ are the column subsets where an erasure $\it{does}$ occur.  To find any erased systematic symbols from $\bf{v}_e$, $\bf{H}_e^{-1}$ can be computed if it is full rank.  An ML decoder would perform this inverse matrix operation, which requires $O((n-k)^3)$ complexity for dense matrices, but for sparse $\bf{H}$ requires fewer computations.  The LDPC message passing algorithm gives a suboptimal approximation to this matrix inverse at a slight cost of erasure correction performance, but with a computational complexity of only $O((n-k)w_rN_{iter})$, where $N_{iter}$ is the number of message passing iterations, which is typically around 10-20.  Thus, for a long code where $(n-k) >> w_r$ and $(n-k) >> N_{iter}$, this leads to a decoding complexity that is linear in $n-k$.
+
+\section{Performance Comparison}\label{sec:Performance}
+Since RS codes have the MDS property, their erasure correction performance cannot be beat for a given block size and code rate.  The block size of RS codes must be less than their field size, so larger block sizes necessitate operations over larger Galois Fields.  Because of this requirement, it is not practical for the RS block size to be much larger than 511.  Also, the $O((n-k)^3)$ complexity of the RS decoding is a distinct disadvantage for larger $n-k$.  However, if a larger latency can be tolerated, it is fair to compare a longer block size LDPC code against a smaller block size RS code.  For example, a $(2040, 1530)$ LDPC code with $r = \frac{3}{4}$ could be compared against a sequence of eight $(255, 192)$ RS codes.  A carefully designed irregular binary LDPC code can outperform the RS code in this case.  As the block size of the LDPC code increases, this performance advantage over the RS code will also grow.  The reason a RS code of size (255, 192) over GF(256) is chosen in this paper is because the TIA-5041 specification \cite{TIA5041_standard} describes it as a candidate code for application layer FEC and thus serves as a good performance comparison point against the LDPC codes proposed herein.
+
+The degree distribution of the LDPC code has a large impact on both the decoding threshold of the code and the error floor behavior of the code \cite{luby-01}.  The decoding threshold is the signal-to-noise (SNR) level at which the coded error rate drops precipitously.  The error floor region is the high-SNR region where a small number of minimum distance codewords or codeword-like graph structures such as stopping sets or trapping sets will confuse an iterative, non-ML decoder \cite{cole_2-06}.  The variable node (V(x)) and check node (C(x)) degree distributions are typically given by the equations $V(x) = \sum_{i = 1}^{d_v} V_i x^i$ and $C(x) = \sum_{i = 1}^{d_c} C_i x^i$, where $d_v$ and $d_c$ are the maximum variable and check node degrees, respectively.  Two LDPC codes were analyzed in depth for this paper.  Both are of moderate length and represent two code rates that are useful in different loss scenarios.  The $r=\frac{1}{2}$ codes such as the $(2000, 1000)$ code used in this paper have an almost regular degree profile given by the degree polynomials of roughly:
+\begin{align*}
+  V(x) &= 0.0005x + 0.005x^2 + 0.9895x^3 + 0.005x^4 \\
+  C(x) &= 0.997x^6 + 0.003x^7
+\end{align*}
+
+The $0.0005x$ term in $V(x)$ represents the final column of $\bf{H}$ where the triangle ends.  The lower triangular form of $\bf{H}$ used in this work is similar to the double identity parity structure in the $\bf{H}$ of irregular repeat-accumulate codes \cite{Jin-2000}, but it does not suffer from the constraint that all of the $n-k$ parity columns of $\bf{H}$ are of degree two.  It is mostly this surfeit of degree-two variable nodes that leads to small stopping sets and codewords, and thus a relatively high error floor.  
+
+\begin{figure*}[!ht]
+\centering
+\includegraphics[height=3.5in, width = \textwidth]{LDPC_matrix_triangular_2040_1530_cropped.png}
+\caption{Triangular Form (2040, 1530) LDPC Code Parity Check Matrix  \label{fig:LDPC_matrix_triangular}}
+\end{figure*}
+
+In this paper we also look at two $r=\frac{3}{4}$ codes of $k=3060$ and $k=1530$, which have degree polynomials of roughly:
+\begin{align*}
+  V(x) &= 0.0002x + 0.0324x^2 + 0.3311x^3 + 0.4995x^4 \\
+       & + 0.1279x^5 + 0.0081x^6  + 0.0007x^7 \\
+  C(x) &= 0.99x^{15} + 0.01x^{16}
+\end{align*}
+%\begin{figure}[htbp]
+%\centerline{\includegraphics{LDPC_matrix_triangular_2040_1530_cropped.png}}\caption{Triangular Form (2040, 1530) LDPC Code}
+%\centerline{\includegraphics{fig1.png}}\caption{Triangular Form (2040, 1530) LDPC Code Parity Check Matrix}
+%\label{LDPC_matrix_triangular}
+%\end{figure}
+
+A lower error floor can be obtained by going to a non-binary LDPC code \cite{Garrammone_NonbinaryLDPC-10}.  This would involve simply taking a binary $\bf{H}$ matrix and for each position where there is currently a $1$, randomly substitute in a non-zero value from GF(m).  However, non-binary codes cannot be decoded by the simple MPA and instead an ML decoding procedure must be employed.  The ML decoding of non-binary LDPC codes suffers from only one of the two drawbacks of the RS decoding described above in section \ref{sec_RS}.  The operations  on the matrix to find the inverse of the received symbol matrix must be performed over the Galois Field that is used in the LDPC code design.  However, the second drawback of RS codes, namely the density of the received matrix that must be inverted, is sparse in the LDPC code.  Applying ML decoding to binary LDPC codes, after the MPA has failed, is also a way to increase the performance of these codes, both in the error floor region and at lower SNR's as well.
+
+The LDPC codes used in this work, although binary, still have a relatively good error floor performance due to their careful construction that avoids small cycles in the Tanner graph \cite{tanner-01}.  
+
+The block error performance of a $(4080, 3060)$ code is compared to a $(255, 192)$ RS code in Figure \ref{fig:LDPC_triangular_4080_3060_Perf_vs_RS}.  In this Monte Carlo simulation, 200000 random code blocks are sent through the binary erasure channel with the raw PER given by the value in the horizontal axis.  Since both of these codes have $r = 0.75$, as the raw PER gets close to 25\%, the coded block error rate approaches one for both codes.  Note in the figure that the LDPC code with the simple message passing algorithm outperforms the RS code at PER below 18\%.  The full range of PER's tested in this scenario is between 14-22\%.  The curve marked 'LDPC MP/Maximum Likelihood Decoder' does not show up at all in the figure because for all PER's tested, there was not a single coded block error when utilizing ML decoding on this LDPC code - which means it outperformed the RS code at all PER's.  The ML decoder starts with the simple MPA and after 10 iterations, if the MPA hasn't corrected all of the erasures, then the remaining erasures are removed by using a Gaussian Elimination process to find the inverse of the submatrix formed by the columns of $\bf{H}$ where there are remaining erasures after the MPA.
+
+
+\begin{figure}[htbp]
+	\centerline{\includegraphics[height=3.5in, width = 3.15in]{LDPC_triangular_4080_3060_Perf_vs_RS.png}}
+	\caption{}
+	\label{fig:LDPC_triangular_4080_3060_Perf_vs_RS}
+\end{figure}
+
+One seemingly straightforward argument in favor of RS codes is that the latency required for longer LDPC codes is proportionately larger compared to the shorter RS codes.  For example, a $(2000, 1000)$ LDPC code will require 8 times as long to collect and encode/decode symbols as a $(250, 125)$ RS code.  This argument is true when the packet erasures are completely random and independent.  However, for a bursty channel, which is common in packet networks where erasure codes are commonly used, the performance of short RS codes will not stand up to longer LDPC codes unless an interleaver is used to combine symbols across multiple RS code blocks.  Interleaving across multiple RS codes, to give them the same time diversity that the long LDPC codes enjoy, will introduce more latency, thus negating any argument that short RS codes have an advantage by providing a lower latency.
+
+
+
+\section{OpenCL Implementation of LDPC Codec}\label{sec:Implementation}
+
+The simulations for this paper were first performed in Matlab, and the results for long LDPC code performance at low PER took considerable time.  OpenCL is a high-level hardware design language that resembles C code. To speed up simulation time and investigate how the LDPC codes perform at lower raw PER (which is considered the 'error floor' region of the performance curve), an implementation of the LDPC codec was done in OpenCL.
+
+While it is convenient to write code in a higher level language such as OpenCL, the code generated from the OpenCL compiler is typically not as efficient as manually designed hardware design language (HDL) code.  However, even the OpenCL implementation of the codec produced a hardware design that allowed multi-Gbps throughput for both the encoder and decoder.  In fact, over 1 Gbps was realized in `emulation mode,' where a general purpose CPU is performing an emulation of the OpenCL codec hardware design.  The roughly two orders of magnitude speedup found in the OpenCL emulation from the Matlab simulation can be primarily attributed to the OpenCL code being a software implementation in C, which is compiled code and inherently faster than the interpreted code in Matlab simulations.
+
+To get an even greater speedup, the OpenCL HDL design was compiled to run on an FPGA.  The simple message passing decoding algorithm applied to the systematic LDPC erasure codes described in this paper are a good candidate for hardware implementation.  The simple XOR accumulations that are required in both the encoder and decoder are simple to implement in a parallel hardware architecture and are highly performant. 
+
+The code symbol size in the OpenCL design was specified to be an array of 128 64-bit long integers.  The OpenCL compiler was able to efficiently design the parallel operations performed across the $S_L=128*64$ bits in each symbol. However, the compiler was not able to automatically find efficient ways to parallelize the $n-k$ parity check operations performed in each decoding iteration, such as by running some of the parity check constraints in parallel.  So, a manual partitioning of the parity check constraint equations can be performed to increase throughput.  For example, a simple way to speed up the decoder by a factor of two is to perform the message passing algorithm on the first $\frac{n-k}{2}$ parity constraints in parallel with a message passing algorithm operating on the other half of the parity check constraints.  The results from the two instances of the message passing algorithm are combined by taking the separate instances of the codeword that the two MPA's were operating on and performing a union of the non-erasure positions in the two codewords.  If either of the two codewords has a non-erasure value in a position, then that is used as the correct value.  If both instances of the codeword are erasures, then so is the combined final codeword in that position.  This is a simple way to trade additional hardware resources for an almost doubling of throughput.  This method can scale up if more hardware resources are available for more parallelization.
+
+A simple throughput test showed speeds of 36.3 Gbps for the $(2040, 1530)$ code at 14.06\% raw PER as seen in the final row of Table \ref{tab:FERHighSNR}. The throughput in information bits per second is calculated as $\frac{S_L k N_T}{T_{sim}}$. The throughput numbers will be highly dependent on the code rate and the raw PER.  A higher code rate will lead to higher throughput, because there are fewer check node constraints per information symbol.  A lower raw PER leads to higher throughput because it requires fewer MPA iterations to reach a valid codeword on average, because there is an early stopping criterion built into the decoder.  If there are no erasures present in the codeblock after a decoding iteration, then the decoder stops and returns the codeblock that the algorithm converged upon.  Thus, if the maximum number of iterations in the decoder is set at 10, then there can be an almost 10 times variation in decoder throughput between very low PER, where the average number of iterations may be 1 or 2, to a high PER behavior, where the maximum number of decoder iterations is frequently reached.  Note that this test system was not actually sending packets over a real network that would encounter delay, jitter, and out-of-order packet delivery - so these throughput numbers can be looked at as an upper bound on a real communication system.  
+
+When considering these high throughput numbers for an erasure decoder, remember that there are fundamental differences between erasure codes and physical layer error correction codes.  One difference is that the number of bits in each of these erasure codes is much higher than a typical physical layer code.  With $k=1000$ and each symbol equaling a typical packet size, which is set to $1024$ bytes in this research, the number of bits per erasure code block is $1000*1024*8 = 8192000$.  So, even a decoder that only processes one erasure code block per second is still achieving an effective throughput of 8 Mbps. Another key reason that thoughput is higher with these erasure codes compared to physical layer codes is that so much of the decoding operation is a simple parallel XORing of the $1024*8$ bits per symbol.  In hardware implementations, it is simple to perform these XORs in parallel, which greatly increases throughput.  Most physical layer decoding techniques must operate on soft values of probabilities about a single bit likelihood, which even when implemented with a fixed point value must still incorporate at least 8 bits or so per soft value.  Thus the storage and calculation logic for a physical layer error correction decoder is at least a factor of 8 greater per bit of decoding throughput compared to an erasure decoder that only needs to perform XOR operations in parallel to do its decoding.
+
+\begin{table}[htbp]
+\caption{Block Error Rates at High SNR}
+\begin{center}
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{Raw PER} & \textbf{LDPC Code BER}& \textbf{RS BER}& \textbf{$N_T$} &$T_{sim}$ (sec)\\
+\cline{1-5} 
+%\multicolumn{5}{c}{\textbf{}} \\
+\multicolumn{5}{c}{\textbf{$(2000, 1000)$ LDPC Code, Iterative Decoding}} \\
+%\textbf{}\multicolumn{4}{|c|}{\textbf{$(2000, 1000)$ LDPC Code, Iterative Decoding}} \\
+\hline
+$0.375$ & $2.2*10^{-5}$ & $2.1*10^{-5}$ & $2*10^6$ & $2061$\\
+$0.3594$ & $0$ & $2*10^{-6}$ & $10^7$ & $4013$\\
+$0.3438$ & $0$ & $0$ & $2*10^8$ & $70397$ \\
+$0.3281$ & $0$ & $0$ & $10^8$ & $$ \\
+\hline
+\multicolumn{5}{c}{\textbf{$(2040, 1530)$ LDPC Code, Iterative Decoding}} \\
+\hline
+$0.1875$ & $0.02$ & $7.3*10^{-3}$ & $10^6$ & $812$\\
+$0.1719$ & $1.3*10^{-4}$ & $9.3*10^{-4}$ & $10^6$ & $525$ \\
+$0.1562$ & $0$ & $6.3*10^{-5}$ & $10^7$ & $4143$ \\
+$0.1406$ & $0$ & $2*10^{-6}$ & $10^8$ & $34492$ \\
+\hline
+
+%\multicolumn{5}{l}{$^{\mathrm{a}}$Sample of a Table footnote.}
+\end{tabular}
+\label{tab:FERHighSNR}
+\end{center}
+\end{table}
+% $^{\mathrm{a}}$
+
+The statistics in Table \ref{tab:FERHighSNR} refer to the LDPC code \textit{Block} error rate.  If a block contains $k$ symbols, and approximately 10\% or so of the symbols are still erased after iterative decoding, then the \textit{Symbol} error rates are approximately an order of magnitude lower than shown in the table.  The number of LDPC code frames sent through the Monte Carlo simulation for a given raw PER is indicated by $N_T$.  The comparable RS code shown in the table for the $(2000, 1000)$ LDPC code is of size $(250, 125)$.  So, it is of the same rate as the LDPC code and exactly 8 times shorter.  Since the RS code is MDS, it is not necessary to actually implement the RS decoder in the simulation and instead it is sufficient to assume a block error occurs if the number of erased symbols exceeds $n-k$.  The number of RS block errors is designated as $N^{RS}_{err}$, so the RS BER is calculated as $\frac{N^{RS}_{err}}{8N_T}$.  The comparable RS code shown in the table for the $(2040, 1530)$ LDPC code is of size $(255, 192)$, which is also one eighth the size and approximately the same code rate. 
+
+The raw PER values in the first column of Table \ref{tab:FERHighSNR} are chosen as a multiple of $\frac{1}{64}$ because the random number generator in the hardware creates a random 64-bit long integer, and the bottom 6 bits are used as the random variable to determine whether a packet erasure occurs or not.
+
+\section{Summary}\label{sec:Summary}
+
+This paper compares the performance of a girth-constrained, moderate-length LDPC code versus a comparable rate RS code.  The block erasure rate performance is similar between the two codes, as long as an LDPC code of at least eight times the block length of the comparable RS code is utilized.  The reduced encoding and decoding complexity of the LDPC code gives it an advantage over RS codes as a candidate for an FEC erasure code in a digital IF standard such as DIFI.  Although only a small number of LDPC code block lengths and code rates were presented in this paper, the LDPC code construction method used in this work can create similarly performing LDPC codes with a wide variety of block lengths and code rates.
+
+\section*{Acknowledgment}
+
+The author thanks his colleagues from Envistacom who reviewed the paper and offered useful input.  He also wishes to thank the anonymous reviewers from the conference paper selection committee for their feedback.
+
+%\begin{thebibliography}{00}
+%\bibitem{b1} G. Eason, B. Noble, and I. N. Sneddon, ``On certain integrals of Lipschitz-Hankel type involving products of Bessel functions,'' Phil. Trans. Roy. Soc. London, vol. A247, pp. 529--551, April 1955.
+%\bibitem{b2} J. Clerk Maxwell, A Treatise on Electricity and Magnetism, 3rd ed., vol. 2. Oxford: Clarendon, 1892, pp.68--73.
+%\end{thebibliography}
+\bibliographystyle{IEEEtran}
+%\bibliographystyle{plain}
+\bibliography{chadsbib}
+
+\end{document}
