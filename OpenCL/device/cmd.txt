@@ -1,0 +1,5 @@
+
+aoc -march=emulator -legacy-emulator -v -board=a10gx ldpc_encoder_top.cl -o ../bin/ldpc_encoder_em.aocx 
+
+aoc -v -board=a10gx ldpc_encoder_top.cl -report -o ../bin/ldpc_encoder.aocx 
+
