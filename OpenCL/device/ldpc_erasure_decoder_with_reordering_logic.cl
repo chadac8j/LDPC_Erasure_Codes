@@ -14,6 +14,17 @@
 *  work item, single workgroup kernel. It is intended to be used for a 
 *  all supported code rates with either short or normal frame sizes
 *
+* To allow decoding in parallel with packet reception and reordering, I will need 3 buffers?
+*  One to hold currently decoding block (previously received block)
+*  One to hold main block that is being received at present time
+*  One to hold future block that might trickle in while current block also being received?
+*  Maybe not!  Why not allow decoding on currently assembling block?  It won't hurt anything to continue filling
+* in erasures as decoding progresses... then use early stopping criteria to exit.
+* So, current block that is being decoded is codeword_first if is_first_codeword==1, else codeword_second if is_first_codeword==0
+* The other codeword buffer holds the next block that is being assembled.  When the current codeword is either fully decoded or
+* a maximum number of iterations has been reached and the decoding fails, the buffers switch and the decoder begins working on the
+* other buffer while the one that was being decoded previously is zeroed out and becomes the place to hold the next block's packets
+
 * ASSUMPTIONS: 1) The symbol_type.is_erasure field is properly set to 1 for erased packets
 *   and 0 for received packets.  
 * 			   2) The symbol_type.symbol array is populated with all 0's for erased symbols since 
