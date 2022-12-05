@@ -1,0 +1,43 @@
+\documentclass[12pt]{article}
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+The basic SNR is defined as 'Average signal magnitude' over 'Signal magnitude variance' and is given by:
+
+\begin{equation}
+SNR  = \frac{\frac{1}{N}\sum_{i=1}^N |y_i|}{\frac{2}{N}\sum_{i=1}^N (|y_i| - \frac{1}{N}\sum_{i=1}^N |y_i|)^2}
+	\label{eq:SNR_basic}
+\end{equation}
+
+
+Where $y$ is the complex received signal vector of length $N$ MPSK (BPSK in this case) symbol samples.  In equation \ref{eq:SNR_basic}, the numerator is a sample estimate of $E_s$ and the denominator is a sample estimate of $\frac{N_o}{2}$.  The factor of 2 in the denominator is because we are getting a sample average of $\frac{N_o}{2}$, so we need the factor of 2 to get back to $\frac{E_s}{N_o}$.  
+
+
+For numeric stability in the hardware fixed-point implementation, we want to get rid of the division in the average values.  To accomplish this in equation \ref{eq:SNR_basic}, we use the mathematical trick of multiplying by 1 in the form of $\frac{N^3}{N^3}$.  We also define
+
+\begin{equation}
+sum\_mag  = \sum_{i=1}^N |y_i|
+	\label{eq:sum_mag}
+\end{equation}
+
+After the multiplying by $\frac{N^3}{N^3}$ factor and substituting in equation \ref{eq:sum_mag}, we have 
+
+\begin{equation}
+SNR\_simple\_mag\_est = \frac{(N^2 sum\_mag)}{2(\sum_{i=1}^N((N |y_i| - sum\_mag)^2)}
+	\label{eq:SNR_final}
+\end{equation}
+
+When we bring an $N^2$ into the parenthesis of the square factor in the denominator of equation \ref{eq:SNR_final} it becomes an $N$ on the left side and gets subsumed into $sum\_mag$ on the right side.
+
+
+
+\end{document}
+
